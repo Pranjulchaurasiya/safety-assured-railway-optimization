@@ -119,7 +119,8 @@ Both properties returned `True` for every measured configuration (N=5, N=12). Th
 ![Repair adapter output](assets/repair_adapter_output.png)
 
 **Statistical Evaluation over 10 runs** (Stage 6):
-![Statistical runs output](assets/statistical_runs_output.png)
+![Statistical runs output](assets/statistical_runs_output_n=5.png)
+![Statistical runs output](assets/statistical_runs_output_n=5.png)
 ## 📑 Research Paper
 
 
