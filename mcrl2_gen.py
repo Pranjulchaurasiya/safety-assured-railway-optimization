@@ -62,7 +62,7 @@ def generate_mcrl2_spec(trains_dict, out_path="snapshot.mcrl2"):
                       f"sync_req_{b}", f"sync_rel_{b}"]
 
     # Write action declarations
-    all_acts = enter_leave + sync_acts
+    all_acts = enter_leave + sync_acts + ["finish"]
     L.append("act")
     for i, a in enumerate(all_acts):
         suffix = "," if i < len(all_acts)-1 else ";"
@@ -77,10 +77,10 @@ def generate_mcrl2_spec(trains_dict, out_path="snapshot.mcrl2"):
         steps = []
         for b in bseq:
             steps.append(
-                f"enter_{sid}_{b} . req_{b} . grant_{b} . "
-                f"leave_{sid}_{b} . rel_{b} . free_{b}"
+                f"req_{b} . enter_{sid}_{b} . "
+                f"leave_{sid}_{b} . rel_{b}"
             )
-        body = " .\n    ".join(steps)
+        body = " .\n    ".join(steps + ["finish"])
         L.append(f"proc Train_{sid} =")
         L.append(f"  {body};")
         L.append("")
@@ -100,7 +100,7 @@ def generate_mcrl2_spec(trains_dict, out_path="snapshot.mcrl2"):
     comm_str = ",\n    ".join(comm_list)
 
     # Allow set
-    allow_list = (enter_leave +
+    allow_list = (enter_leave + ["finish"] +
                   [f"grant_{b}" for b in blocks] +
                   [f"free_{b}"  for b in blocks])
     allow_str = ", ".join(allow_list)

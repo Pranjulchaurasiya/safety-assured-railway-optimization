@@ -1,1 +1,1 @@
-mu X . (<true> true || [true] X)
+nu X(c: Nat = 0). ((val(c == 5) || <true>true) && [finish] X(c + 1) && [!finish] X(c))

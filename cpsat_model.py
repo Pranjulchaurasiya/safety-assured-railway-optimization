@@ -162,6 +162,15 @@ def build_and_solve(trains_dict, time_limit_s=60):
         "num_vars":        len(a_vars) + len(d_vars),
         "num_constraints": len(model.Proto().constraints),
         "objective_value": obj_value,
+        "schedule": (
+            {tno: [
+                {"station": ev.station_code,
+                 "arrival_min": solver.Value(a_vars[(tno, idx)]),
+                 "departure_min": solver.Value(d_vars[(tno, idx)])}
+                for idx, ev in enumerate(train.events)]
+             for tno, train in trains_dict.items()}
+            if status in (cp_model.OPTIMAL, cp_model.FEASIBLE) else None
+        ),
     }
 
     # Show per-train delays when objective > 0

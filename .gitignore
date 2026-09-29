@@ -1,0 +1,5 @@
+__pycache__/
+*.lps
+*.pbes
+snapshot_n*.mcrl2
+.uv-cache/

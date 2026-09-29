@@ -3,16 +3,30 @@ import time
 import os
 import sys
 
-MUTUAL_EXCLUSION_MCF = "nu X . ([true] X)\n"
-DEADLOCK_FREEDOM_MCF = "mu X . (<true> true || [true] X)\n"
+def write_property_files(trains_dict, workdir="."):
+    """Generate properties for the blocks and train count in this snapshot.
 
+    P1 forbids a second grant for any block before its free action.
+    P2 permits a terminal deadlock only after every train has finished.
+    Both describe the untimed process model, not the optimized clock times.
+    """
+    from mcrl2_gen import all_blocks
 
-def write_property_files(workdir="."):
-    for name, content in [("mutual_exclusion.mcf", MUTUAL_EXCLUSION_MCF),
-                           ("deadlock_freedom.mcf", DEADLOCK_FREEDOM_MCF)]:
-        with open(os.path.join(workdir, name), "w") as f:
+    blocks = all_blocks(trains_dict)
+    if not blocks or not trains_dict:
+        raise ValueError("Verification needs at least one train and block")
+    p1 = " &&\n".join(
+        f"[true* . grant_{block} . (!free_{block})* . grant_{block}] false"
+        for block in blocks
+    ) + "\n"
+    n = len(trains_dict)
+    p2 = (f"nu X(c: Nat = 0). "
+          f"((val(c == {n}) || <true>true) && "
+          f"[finish] X(c + 1) && [!finish] X(c))\n")
+    for name, content in [("mutual_exclusion.mcf", p1),
+                          ("deadlock_freedom.mcf", p2)]:
+        with open(os.path.join(workdir, name), "w", encoding="utf-8") as f:
             f.write(content)
-    print("Property files written.")
 
 
 def run_cmd(cmd, timeout=300):
@@ -47,8 +61,11 @@ def verify_snapshot(mcrl2_path, property_name, workdir="."):
     print(f"  lps2pbes   {t2:.3f}s  OK")
 
     rc, out, err, t3 = run_cmd(["pbes2bool", pbes_path])
-    combined = (out+err).lower()
-    verdict = True if "true" in combined else (False if "false" in combined else None)
+    if rc != 0:
+        print(f"  pbes2bool FAILED: {err[:300]}")
+        return None, time.perf_counter()-t_start
+    answer = out.strip().lower()
+    verdict = True if answer == "true" else (False if answer == "false" else None)
     print(f"  pbes2bool  {t3:.3f}s  verdict={verdict}")
     return verdict, time.perf_counter()-t_start
 
@@ -60,17 +77,17 @@ if __name__ == "__main__":
         sys.exit(1)
     print(f"mCRL2: {(out+err).strip().splitlines()[0]}")
     print()
-    write_property_files(".")
-    print()
-
     all_results = {}
 
     # N=5: full batch verification
+    from extract_data import load_corridor_trains, select_density_subset, tag_fastest_as_premium
+    from mcrl2_gen import generate_mcrl2_spec
+    trains_full = load_corridor_trains()
     for n in [5]:
-        spec = f"snapshot_n{n}.mcrl2"
-        if not os.path.exists(spec):
-            print(f"MISSING: {spec} -- run mcrl2_gen.py first")
-            continue
+        subset = select_density_subset(trains_full, n)
+        tag_fastest_as_premium(subset)
+        spec = generate_mcrl2_spec(subset, out_path=f"snapshot_n{n}.mcrl2")
+        write_property_files(subset, ".")
         print(f"=== N={n} ===")
         print("P1: Mutual Exclusion")
         v1, t1 = verify_snapshot(spec, "mutual_exclusion", ".")
@@ -81,16 +98,8 @@ if __name__ == "__main__":
         print(f"N={n} total: {total:.4f}s")
         print()
 
-    # N=12: two overlapping 6-train sliding windows
-    print("=== N=12 (2 overlapping 6-train windows) ===")
-    from extract_data import (
-        load_corridor_trains,
-        select_density_subset,
-        tag_fastest_as_premium,
-    )
-    from mcrl2_gen import generate_mcrl2_spec
-
-    trains_full = load_corridor_trains()
+    # N=12: disjoint partitions; cross-partition interactions are not checked.
+    print("=== N=12 (2 disjoint 6-train partitions) ===")
     subset_12   = select_density_subset(trains_full, 12)
     tag_fastest_as_premium(subset_12)
     items       = list(subset_12.items())
@@ -101,6 +110,7 @@ if __name__ == "__main__":
     for wi, window in enumerate(windows):
         spec_path = f"snapshot_n12_w{wi}.mcrl2"
         generate_mcrl2_spec(window, out_path=spec_path)
+        write_property_files(window, ".")
         print(f"Window {wi+1} ({len(window)} trains):")
         print("P1: Mutual Exclusion")
         v1, t1 = verify_snapshot(spec_path, "mutual_exclusion", ".")
@@ -111,7 +121,7 @@ if __name__ == "__main__":
         print(f"Window {wi+1} total: {t1+t2:.4f}s")
         print()
 
-    print(f"N=12 sliding window total: {total_w_time:.4f}s")
+    print(f"N=12 partition total: {total_w_time:.4f}s")
     print(f"All P1 verdicts: {[v[0] for v in all_verdicts]}")
     print(f"All P2 verdicts: {[v[1] for v in all_verdicts]}")
     all_results[12] = (

@@ -1,1 +1,2 @@
-cpsat_model
+pandas>=2.2,<3
+ortools>=9.14,<9.15

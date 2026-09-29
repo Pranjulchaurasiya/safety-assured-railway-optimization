@@ -1,14 +1,10 @@
-"""
-Baseline Cost Calculator
-=========================
-Computes the UNOPTIMIZED weighted departure delay cost for N=5 and N=12,
-using the exact same penalty formula as the CP-SAT objective function:
-  cost = sum(w_i * max(0, actual_dep_i - scheduled_dep_i))
+"""Priority-ordered greedy baseline using consistent whole-train shifts.
 
-In the baseline scenario (no optimization), when two trains conflict on the
-same block, the lower-priority train is delayed by exactly the amount needed
-to let the higher-priority train clear first. This matches how a human
-dispatcher would manually resolve conflicts without a formal optimizer.
+Each train retains its scheduled travel and dwell pattern. When its next
+block occupation conflicts with a previously placed train, all of its
+events are shifted together. The resulting origin delay is costed with
+the same priority weights as CP-SAT. This is a feasible heuristic, not
+an operating-rule dispatcher or an optimal solution.
 """
 
 from extract_data import (
@@ -17,90 +13,67 @@ from extract_data import (
     tag_fastest_as_premium,
 )
 
-DELTA_T_SEP = 2  # same as cpsat_model.py
+DELTA_T_SEP = 2
+
+
+def train_intervals(train):
+    """Return scheduled block intervals, rejecting missing/invalid times."""
+    result = []
+    for first, second in zip(train.events, train.events[1:]):
+        departure = first.departure_min
+        arrival = second.arrival_min
+        if departure is None or arrival is None or arrival <= departure:
+            raise ValueError(
+                f"Cannot construct a baseline block interval for {train.train_no}"
+            )
+        block = tuple(sorted((first.station_code, second.station_code)))
+        result.append((block, departure, arrival))
+    return result
 
 
 def compute_baseline_cost(subset):
-    """Simulate naive priority-based conflict resolution (no optimization).
-    Higher-priority train always goes first. Lower-priority train is delayed
-    by exactly enough to let the higher-priority train clear the block.
-    Returns total weighted departure delay cost."""
+    """Place trains in descending priority, shifting entire routes on conflict."""
+    placed = {}
+    delays = {}
+    trains = sorted(
+        subset.items(),
+        key=lambda item: (-item[1].priority_weight,
+                          item[1].events[0].departure_min or 0,
+                          str(item[0])),
+    )
+    for train_id, train in trains:
+        intervals = train_intervals(train)
+        delay = 0
+        while True:
+            new_delay = delay
+            for block, departure, arrival in intervals:
+                for occupied_start, occupied_end in placed.get(block, ()):
+                    shifted_start = departure + delay
+                    shifted_end = arrival + delay
+                    if (shifted_start < occupied_end + DELTA_T_SEP
+                            and occupied_start < shifted_end + DELTA_T_SEP):
+                        new_delay = max(new_delay,
+                                        occupied_end + DELTA_T_SEP - departure)
+            if new_delay == delay:
+                break
+            delay = new_delay
+        delays[train_id] = delay
+        for block, departure, arrival in intervals:
+            placed.setdefault(block, []).append(
+                (departure + delay, arrival + delay)
+            )
 
-    # Build list of (train, block, dep_time, arr_time) for each block traverse
-    traversals = []
-    for tno, t in subset.items():
-        sched_dep = (t.events[0].departure_min
-                     if t.events[0].departure_min is not None
-                     else t.events[0].arrival_min or 0)
-        for k in range(len(t.events) - 1):
-            ev_a = t.events[k]
-            ev_b = t.events[k + 1]
-            block = tuple(sorted([ev_a.station_code, ev_b.station_code]))
-            dep = ev_a.departure_min if ev_a.departure_min is not None else 0
-            arr = ev_b.arrival_min if ev_b.arrival_min is not None else dep + 20
-            traversals.append({
-                "tno":       tno,
-                "weight":    t.priority_weight,
-                "block":     block,
-                "dep":       dep,
-                "arr":       arr,
-                "sched_dep": sched_dep,
-                "actual_dep": sched_dep,  # starts at scheduled, grows if delayed
-            })
-
-    # Sort by priority descending, then scheduled departure ascending
-    # (highest priority trains go first; within same priority, earlier first)
-    traversals.sort(key=lambda x: (-x["weight"], x["dep"]))
-
-    # For each block, track when it was last cleared
-    block_clear_time = {}
-
-    # Assign actual departure times greedily
-    delays = {tno: 0 for tno in subset}
-
-    for tr in traversals:
-        block    = tr["block"]
-        last_clr = block_clear_time.get(block, 0)
-        # Must wait until block is clear + separation
-        earliest_dep = last_clr  # block clear time is when last train ARRIVED
-        if tr["dep"] < earliest_dep + DELTA_T_SEP:
-            # Forced to delay
-            forced_dep = earliest_dep + DELTA_T_SEP
-            extra_delay = forced_dep - tr["dep"]
-            delays[tr["tno"]] = max(delays[tr["tno"]], extra_delay)
-            actual_arr = tr["arr"] + extra_delay
-        else:
-            actual_arr = tr["arr"]
-        block_clear_time[block] = actual_arr
-
-    # Compute weighted cost using same formula as CP-SAT objective
-    total_cost = 0
-    for tno, t in subset.items():
-        sched = (t.events[0].departure_min
-                 if t.events[0].departure_min is not None
-                 else t.events[0].arrival_min or 0)
-        delay = delays[tno]
-        total_cost += t.priority_weight * delay
-
-    return total_cost, delays
+    return sum(subset[train_id].priority_weight * delay
+               for train_id, delay in delays.items()), delays
 
 
 if __name__ == "__main__":
     trains = load_corridor_trains()
-
-    for n in [5, 12]:
+    for n in (5, 12):
         subset = select_density_subset(trains, n)
         tag_fastest_as_premium(subset)
-
-        baseline_cost, delays = compute_baseline_cost(subset)
-
-        print(f"\nN={n}  baseline_cost={baseline_cost}")
-        delayed = {tno: d for tno, d in delays.items() if d > 0}
-        if delayed:
-            print(f"  Trains delayed in baseline (no optimization):")
-            for tno, d in sorted(delayed.items(), key=lambda x: -x[1]):
-                t = subset[tno]
-                print(f"    {tno:15s} w={t.priority_weight:2d}  "
-                      f"delay={d}min  cost={t.priority_weight * d}")
-        else:
-            print(f"  No delays in baseline (trains naturally non-conflicting)")
+        cost, delays = compute_baseline_cost(subset)
+        print(f"N={n} baseline_cost={cost}")
+        for train_id, delay in delays.items():
+            if delay:
+                print(f"  {train_id}: +{delay} min")
