@@ -1,19 +1,17 @@
 """
-Stage 5 — Automated Repair Adapter (Algorithm 1) — COMPLETE VERSION
-=====================================================================
-Implements the exact loop from the paper's Algorithm 1 / Section IV-E.
+Stage 5 — Experimental repair adapter
+=====================================
+The process model does not encode optimized clock times. A temporal
+separation change therefore cannot be claimed to repair a failed process
+property. This module records diagnostic feedback but does not claim an
+automated, verified repair loop.
 
 Trace extraction uses lps2lts --deadlock --trace (mCRL2 202507.0),
 since lpsxsim in this version is a GUI tool only.
 lps2lts generates .trc files which tracepp converts to readable action
 sequences, from which conflicting train pairs are identified.
 
-All five stages now complete:
-  1. OR-Tools CP-SAT solve
-  2. mCRL2 spec generation
-  3. mCRL2 verification (pbes2bool)
-  4. Trace extraction (lps2lts + tracepp)
-  5. Constraint injection + re-solve
+The current CP-SAT model does not consume recorded repair attributes.
 """
 
 import os
@@ -156,10 +154,9 @@ def inject_repair_constraint(trains_dict, conflict_block, delta_t=DELTA_T_REPAIR
 
 def run_ovr_loop(trains_dict, max_iterations=MAX_REPAIR_ITERATIONS, workdir="."):
     """
-    Run the full Optimize-Verify-Repair loop.
-    All five stages implemented. Returns real measured timings.
+    Optimize and verify once. Record failures without claiming repair.
     """
-    write_property_files(workdir)
+    write_property_files(trains_dict, workdir)
 
     repair_count    = 0
     total_ortools_s = 0.0
@@ -174,6 +171,9 @@ def run_ovr_loop(trains_dict, max_iterations=MAX_REPAIR_ITERATIONS, workdir=".")
         status, ort_elapsed, solution, stats = build_and_solve(current_trains)
         total_ortools_s += ort_elapsed
         print(f"  [Iter {iteration}] OR-Tools: {status} in {ort_elapsed:.4f}s")
+        if status not in ("OPTIMAL", "FEASIBLE"):
+            print("  No candidate timetable; verification skipped.")
+            break
 
         # ── Phase 2: Generate mCRL2 spec ──────────────────────────────
         spec_path = os.path.join(workdir, f"snapshot_iter{iteration}.mcrl2")
@@ -203,7 +203,7 @@ def run_ovr_loop(trains_dict, max_iterations=MAX_REPAIR_ITERATIONS, workdir=".")
 
         # ── Decision ─────────────────────────────────────────────────
         if v1 is True and v2 is True:
-            print(f"  [Iter {iteration}] SAFE -- both properties True.")
+            print(f"  [Iter {iteration}] Both untimed process properties True; timetable times not formally verified.")
             break
 
         if v1 is False or v2 is False:
@@ -227,18 +227,17 @@ def run_ovr_loop(trains_dict, max_iterations=MAX_REPAIR_ITERATIONS, workdir=".")
 
             if block is None:
                 print(f"  [Iter {iteration}] Could not identify conflict block.")
-                print(f"  [Iter {iteration}] Applying global separation increase.")
-                block = "KRMI_THVM"  # fallback to busiest block
+                print(f"  [Iter {iteration}] No block could be identified; no repair recorded.")
+                break
 
-            # ── Phase 5: Inject constraint + re-optimize ──────────────
-            print(f"  [Iter {iteration}] Phase 5: Injecting constraint "
-                  f"for block {block}...")
+            # Record diagnostic feedback only: CP-SAT does not consume it.
+            print(f"  [Iter {iteration}] Recording suggested separation for block {block}...")
             current_trains = inject_repair_constraint(
                 current_trains, block, DELTA_T_REPAIR
             )
             repair_count += 1
-            print(f"  [Iter {iteration}] Constraint injected. Re-optimizing...")
-            continue  # loop back to Phase 1
+            print(f"  [Iter {iteration}] Feedback not consumed by CP-SAT; stopping.")
+            break
 
         if v1 is None or v2 is None:
             print(f"  [Iter {iteration}] Verification inconclusive. Stopping.")
@@ -261,8 +260,7 @@ if __name__ == "__main__":
     trains = load_corridor_trains()
 
     print("=" * 60)
-    print("OVR FRAMEWORK -- Full Pipeline (All 5 Stages)")
-    print("Optimize -> Verify -> Extract -> Inject -> Re-optimize")
+    print("OVR PROTOTYPE -- Optimize and process-verify; record repair feedback on failure")
     print("=" * 60)
 
     for n in [5]:
@@ -287,7 +285,7 @@ if __name__ == "__main__":
     print("Stage 1 (Data extraction):     COMPLETE")
     print("Stage 2 (OR-Tools CP-SAT):     COMPLETE")
     print("Stage 3 (mCRL2 spec gen):      COMPLETE")
-    print("Stage 4 (mCRL2 verification):  COMPLETE -- P1=True, P2=True")
-    print("Stage 5 (Repair injection):    COMPLETE -- lps2lts + tracepp")
+    print("Stage 4 (mCRL2 verification):  See measured verdicts above")
+    print("Stage 5 (Repair feedback):     Prepared; not consumed by CP-SAT")
     print()
     print("All results are real measurements on real Indian Railways data.")
